@@ -1,18 +1,16 @@
 from bs4 import BeautifulSoup
-import requests
-import re
-import os
-import urllib.request
-import time
 import csv
-from os import listdir
-from os.path import isfile, join
-import os
-import math
 import json
-
+import math
 from multiprocessing import Pool
 from multiprocessing.dummy import Pool as ThreadPool
+import os
+import re
+import requests
+import time
+import urllib.request
+
+MAX_TIME_OUT = 60
 
 url_root = "https://www.aria.developpement-durable.gouv.fr/"
 url_search = url_root + "?s=&fwp_types_de_publication=accident&fwp_per_page=100&fwp_paged=%s"
@@ -77,7 +75,7 @@ def appelerAPI(numAria) :
         #"data[paged]": 1,
     }
 
-    response = requests.post(url, data = myobj)
+    response = requests.post(url, data = myobj, timeout = MAX_TIME_OUT)
     return(response)
 
 
@@ -85,48 +83,46 @@ def appelerAPI(numAria) :
 # Scraping des liens d'accidents
 # A vérifier : si la fiche a changé, incrément de numéro XXXX-2.
 
-# Nombre de pages, de résultats
-page_resultats = appelerAPI('').text
-nb_resultats = json.loads(page_resultats)['settings']['pager']['total_rows']
-nb_pages = math.ceil(nb_resultats/100) # Ne pas utiliser total_pages car assis sur 10 résultats par page
+links_csv_file = 'url_accidents_ARIA.csv'
 
-print("On parcourt les %s pages"%(nb_pages))
-
-# Sauvegarde des liens dans un fichier
-try : 
-    os.remove("url_accidents_ARIA.csv")
-    print("On a effacé le fichier")
-except : 
-    print("Le fichier n'existe pas")
-    
-outF = open("url_accidents_ARIA.csv", "w", encoding='utf-8')
-for n in range(nb_pages) :
-    print(n, end = ' ')
-
-    page_response = requests.get(url_search%(str(n+1)), timeout=10) # Part de 1 à ... 
-    page_content = BeautifulSoup(page_response.content, "html.parser")
-
-    results = page_content.find_all("h2")
-    for result in results : 
-        link = result.find_all('a')[0]['href']
-        outF.writelines(str(link) + '\n')
-outF.close()
+if os.path.exists(links_csv_file):
+    print("Le fichier des URL existe déjà.")
+else:
+    # Nombre de pages, de résultats
+    page_resultats = appelerAPI('').text
+    nb_resultats = json.loads(page_resultats)['settings']['pager']['total_rows']
+    nb_pages = math.ceil(nb_resultats/100) # Ne pas utiliser total_pages car assis sur 10 résultats par page
+    print("On parcourt les %s pages"%(nb_pages))
+    outF = open("url_accidents_ARIA.csv", "w", encoding='utf-8')
+    for n in range(nb_pages) :
+        print(n, end = ' ')
+        page_response = requests.get(url_search%(str(n+1)), timeout = MAX_TIME_OUT) # Part de 1 à ... 
+        page_content = BeautifulSoup(page_response.content, "html.parser")
+        results = page_content.find_all("h2")
+        for result in results : 
+            link = result.find_all('a')[0]['href']
+            outF.writelines(str(link) + '\n')
+    outF.close()
 
 # -----------------------------------
 # Scraping des pages html
 
 # Lecture des liens d'accidents
-with open('url_accidents_ARIA.csv', 'r') as f:
+with open(links_csv_file, 'r') as f:
     reader = csv.reader(f)
     links = list(reader)
 links = [item for sublist in links for item in sublist]
+print("Nombre d'URL dans la liste des URL : %d." % len(links))
 
 # Pages déjà présentes dans le dossier
-pages = [f for f in listdir(folder) if isfile(join(folder, f))]
+pages = [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
+pages_dict = {}
+for page in pages:
+    pages_dict[page] = True
 
 # Nouvelles pages à télécharger
-missing_links = [link for link in links if re.sub('.*/([^/]*)/', 'fiche_\\1.html', link) not in pages]        
-
+missing_links = [link for link in links if re.sub('.*/([^/]*)/', 'fiche_\\1.html', link) not in pages_dict]        
+print("Nombre de nouvelles fiches à télécharger : %d." % len(missing_links))
 
 def telechargerPageAccident(link) :
     # Chargement des pages
@@ -134,7 +130,7 @@ def telechargerPageAccident(link) :
     meta_page_name = re.sub('.*/([^/]*)/', folder + 'meta_\\1.txt', link)
 
     try : 
-        page = requests.get(link, timeout=10)
+        page = requests.get(link, timeout = MAX_TIME_OUT)
         #missing_links.remove(link)
     except : 
         print("Erreur sur le lien %s"%(link))
@@ -155,7 +151,7 @@ def telechargerPageAccident(link) :
     outF.close()
     
     # Sauvegarde des metadonnées en appellant l'API
-    try : 
+    try: 
         data = json.loads(appelerAPI(numAria).text)['facets']
         outM = open(meta_page_name, "w", encoding='utf-8')
         for child in data : 
@@ -165,20 +161,25 @@ def telechargerPageAccident(link) :
             options = ','.join(options)
             outM.write(str(child + '=' + options + "\n"))
         outM.close()
-    except : 
+    except Exception as inst: 
         print("Erreur sur le lien %s"%(link))
+        print(inst)
         os.remove(page_name)
+        return()
+        
+    print("Ok > " + page_name)
 
 # Parallélisation, sinon c'est vraiment trop long :D (100k fichiers)
-pool = ThreadPool(10)
+pool = ThreadPool(20)
 pool.map(telechargerPageAccident, missing_links)
 pool.close()
 pool.join()
 
 # Si le chargement a été interrompu, le fichier meta est surement vide. Dans ce cas, 
-pages = [f for f in listdir(folder) if isfile(join(folder, f))]
+pages = [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
 pages = [f for f in pages if os.path.getsize(folder + f) == 0]
 pages = [re.sub('meta_(.*).txt', 'fiche_\\1.html', f) for f in pages]
+print("Nombre de fiches corrompues : %d." % len(pages))
 
 for page in pages : 
     print(page)

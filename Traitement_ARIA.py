@@ -23,11 +23,19 @@ def traiterMetadonnees(listeMeta, champ) :
     return(info)
 
 
+def nomFichierPage(page):
+    return folder + page
+
+    
+def nomFichierMeta(page):
+    return folder + re.sub('fiche_(.*).html', 'meta_\\1.txt', page)
+
+
 def traiterAccident(page) : 
     accident = {}
 
     # Lecture de la page
-    raw_page = open(folder + page, encoding="utf-8")
+    raw_page = open(nomFichierPage(page), encoding="utf-8")
     content = BeautifulSoup(raw_page, "lxml")
     raw_page.close()
     
@@ -48,7 +56,7 @@ def traiterAccident(page) :
     accident['Commune'] = re.sub('(.*) - (.*) - (.*)', '\\3', localisation)
 
     # Traitement des métadonnées --> On appelle l'API de recherche avec un seul numéro ARIA
-    meta_file = open(folder + re.sub('fiche_(.*).html', 'meta_\\1.txt', page), 'r', encoding="utf-8")
+    meta_file = open(nomFichierMeta(page), 'r', encoding="utf-8")
     meta = meta_file.read().splitlines()
     meta_file.close()
 
@@ -90,16 +98,23 @@ accidents = []
 
 from datetime import datetime
 print(datetime.now())
-i = 0
-for page in pages_html : 
-    if i % 10000 == 0 : print(i, datetime.now())
-    i = i+1
-    try :
-        accidents.append(traiterAccident(page))
-    except :
-        fiches_en_erreur.append(page)
-print(datetime.now())
 
+i = 0
+for page in pages_html: 
+    if i % 1000 == 0: 
+        print("Après %d pages, heure %s" % (i, datetime.now()))
+    i = i+1
+    try:
+        accidents.append(traiterAccident(page))
+    except:
+        fiches_en_erreur.append(page)
+        if os.path.exists(nomFichierPage(page)):
+            os.remove(nomFichierPage(page))
+        if os.path.exists(nomFichierMeta(page)):
+            os.remove(nomFichierMeta(meta))
+
+print(datetime.now())
+print("Nombre de fiches en erreur détruites à télécharger à nouveau : %d" % len(fiches_en_erreur))
 
 # Passage du dictionnaire en tableau
 df = pd.DataFrame(accidents, columns=accidents[0].keys())
